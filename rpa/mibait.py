@@ -1,8 +1,10 @@
 """Logica de scraping de mibait.com para el flujo 'Paga tu Plan'.
 
-El formulario de pago NO esta en la pagina principal: vive en un iframe que
-carga una app Angular separada (pospago.mibait.com/pagar-factura). Todo el
-flujo —inputs, tarjetas de resultado y modales— ocurre dentro de ese frame.
+El formulario de pago es una app Angular servida en pospago.mibait.com. En el
+sitio publico se embebe en un iframe, pero se puede abrir directamente, lo que
+genera muchas menos peticiones y EVITA el 403 anti-bot que dispara cargar la
+home completa de mibait.com (calibrado: 200+ consultas/seg sin bloqueo por la
+via directa, vs ~12 recargando la home). Por eso vamos directo.
 
 Cuatro desenlaces posibles tras consultar un numero:
   - al_corriente : tarjeta 'Resumen de estado de Cuenta', saldo $0.00
@@ -15,10 +17,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from playwright.sync_api import FrameLocator, Page, TimeoutError as PWTimeout
+from playwright.sync_api import Page, TimeoutError as PWTimeout
 
-MIBAIT_URL = "https://mibait.com/"
-PAGO_FRAME = 'iframe[src*="pospago"]'  # iframe del formulario de pago
+PAGO_URL = "https://pospago.mibait.com/pagar-factura"
 
 _MONTO_RE = re.compile(r"\$\s*([\d,]+\.\d{2})")
 _PERIODO_RE = re.compile(r"periodo\s+(\d{2}-\d{2}-\d{4})", re.IGNORECASE)
@@ -42,31 +43,6 @@ def _todos_montos(texto: str) -> list[float]:
     return [float(x.replace(",", "")) for x in _MONTO_RE.findall(texto)]
 
 
-def _aceptar_cookies(page: Page) -> None:
-    for nombre in ("Aceptar", "Aceptar todo", "Aceptar todas", "Entendido"):
-        try:
-            btn = page.get_by_role("button", name=nombre)
-            if btn.count() and btn.first.is_visible():
-                btn.first.click(timeout=2000)
-                return
-        except PWTimeout:
-            pass
-
-
-def abrir_formulario(page: Page) -> FrameLocator:
-    """Navega a la home, entra a 'Paga tu Plan' y devuelve el frame del
-    formulario con los inputs ya visibles."""
-    page.goto(MIBAIT_URL, wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(1500)
-    _aceptar_cookies(page)
-    page.get_by_role("button", name="Paga tu Plan").first.click(timeout=20000)
-    frame = page.frame_locator(PAGO_FRAME)
-    frame.locator('input[inputmode="numeric"]').first.wait_for(
-        state="visible", timeout=25000
-    )
-    return frame
-
-
 def _visible(loc) -> bool:
     try:
         return bool(loc.count()) and loc.first.is_visible()
@@ -75,8 +51,7 @@ def _visible(loc) -> bool:
 
 
 def _llenar_verificado(campo, valor: str, intentos: int = 3) -> None:
-    """Rellena un input de Angular y confirma que el valor quedo escrito;
-    reintenta si el frame lo limpio durante una recarga."""
+    """Rellena un input de Angular y confirma que el valor quedo escrito."""
     for _ in range(intentos):
         campo.fill("")
         campo.fill(valor)
@@ -85,31 +60,40 @@ def _llenar_verificado(campo, valor: str, intentos: int = 3) -> None:
     raise RuntimeError(f"no se pudo escribir '{valor}' en el campo")
 
 
-def consultar(page: Page, numero: str, frame: FrameLocator | None = None) -> Resultado:
-    """Llena el formulario del frame, envia y clasifica el desenlace.
+def es_403(page: Page) -> bool:
+    try:
+        return "403 Forbidden" in page.content()[:3000]
+    except Exception:
+        return False
 
-    Los modales #modalAlert/#errorsOtp existen ocultos en el DOM desde el
-    inicio, asi que no se puede esperar 'el primero que aparezca': se sondea
-    explicitamente cual de los cuatro desenlaces queda visible."""
-    if frame is None:
-        frame = page.frame_locator(PAGO_FRAME)
 
-    inputs = frame.locator('input[inputmode="numeric"]')
+def abrir_formulario(page: Page) -> None:
+    """Navega directo a la app de pago y espera el formulario listo."""
+    resp = page.goto(PAGO_URL, wait_until="domcontentloaded", timeout=45000)
+    if (resp and resp.status == 403) or es_403(page):
+        raise RuntimeError("403 Forbidden al abrir el formulario")
+    page.locator('input[inputmode="numeric"]').first.wait_for(
+        state="visible", timeout=25000
+    )
+
+
+def consultar(page: Page, numero: str) -> Resultado:
+    """Asume el formulario abierto (abrir_formulario). Llena, envia y clasifica.
+
+    El propio formulario tiene un p.title-billing ('Llena los siguientes
+    campos') y los modales #modalAlert/#errorsOtp existen ocultos desde el
+    inicio, asi que se sondea explicitamente el desenlace y solo se acepta la
+    tarjeta cuando su titulo es un 'Resumen ...'."""
+    inputs = page.locator('input[inputmode="numeric"]')
     inputs.first.wait_for(state="visible", timeout=25000)
     _llenar_verificado(inputs.nth(0), numero)
     _llenar_verificado(inputs.nth(1), numero)
-    frame.locator('button[type="submit"]:has-text("Continuar")').first.click(
-        timeout=15000
-    )
+    page.locator('button[type="submit"]:has-text("Continuar")').first.click(timeout=15000)
 
-    tarjeta = frame.locator("p.title-billing")
-    prepago = frame.locator("dialog#modalAlert")
-    no_bait = frame.locator("dialog#errorsOtp")
+    tarjeta = page.locator("p.title-billing")
+    prepago = page.locator("dialog#modalAlert")
+    no_bait = page.locator("dialog#errorsOtp")
 
-    # Sondear hasta 30s a que se resuelva alguno de los cuatro desenlaces.
-    # Ojo: el propio formulario tiene un p.title-billing ('Llena los
-    # siguientes campos'), por eso solo aceptamos la tarjeta cuando su
-    # titulo es un 'Resumen ...' (estado de cuenta o pago de factura).
     desenlace = None
     for _ in range(60):
         if _visible(no_bait):
@@ -118,6 +102,8 @@ def consultar(page: Page, numero: str, frame: FrameLocator | None = None) -> Res
             desenlace = "prepago"; break
         if _visible(tarjeta) and "resumen" in tarjeta.first.inner_text().lower():
             desenlace = "tarjeta"; break
+        if es_403(page):
+            return Resultado(numero=numero, desenlace="error", error="403")
         page.wait_for_timeout(500)
 
     if desenlace is None:
@@ -130,7 +116,6 @@ def consultar(page: Page, numero: str, frame: FrameLocator | None = None) -> Res
         return Resultado(numero=numero, desenlace="prepago",
                          raw_texto=prepago.first.inner_text().strip())
 
-    # Tarjeta de resumen: leer el contenedor card-body ancestro del titulo.
     contenedor = tarjeta.first.locator(
         "xpath=ancestor::div[contains(@class,'card-body')][1]"
     )

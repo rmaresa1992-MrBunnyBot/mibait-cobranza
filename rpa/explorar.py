@@ -20,8 +20,8 @@ def main() -> None:
         for i, numero in enumerate(NUMEROS, 1):
             print(f"\n===== [{i}/{len(NUMEROS)}] Numero {numero} =====")
             try:
-                frame = mibait.abrir_formulario(page)
-                r = mibait.consultar(page, numero, frame)
+                mibait.abrir_formulario(page)
+                r = mibait.consultar(page, numero)
                 print(f"  desenlace      : {r.desenlace}")
                 print(f"  saldo_pendiente: {r.saldo_pendiente}")
                 print(f"  monto_plan     : {r.monto_plan}")
