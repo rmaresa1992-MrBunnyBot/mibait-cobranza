@@ -2,10 +2,13 @@
 @section('title', 'Cargar cartera')
 
 @section('content')
-<div class="page-head"><div>
-    <h1>Cargar cartera</h1>
-    <p>Layout esperado: columnas <strong>Numero</strong>, <strong>Estatus</strong> y <strong>Fecha de entrega</strong>. Formato .xlsx o .csv.</p>
-</div></div>
+<div class="page-head">
+    <div>
+        <h1>Cargar cartera</h1>
+        <p>Layout esperado: columnas <strong>Numero</strong>, <strong>Estatus</strong> y <strong>Fecha de entrega</strong>. Formato .xlsx o .csv.</p>
+    </div>
+    <a href="{{ route('asignaciones.plantilla') }}" class="btn">⭳ Descargar ejemplo (.xlsx)</a>
+</div>
 
 @if ($errors->any())
     <div class="alert err"><ul>@foreach ($errors->all() as $e)<li>{{ $e }}</li>@endforeach</ul></div>

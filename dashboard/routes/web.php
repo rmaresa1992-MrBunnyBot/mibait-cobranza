@@ -10,5 +10,6 @@ Route::get('/metricas', [MetricasController::class, 'index'])->name('metricas.in
 
 Route::get('/asignaciones', [AsignacionController::class, 'index'])->name('asignaciones.index');
 Route::get('/asignaciones/crear', [AsignacionController::class, 'create'])->name('asignaciones.create');
+Route::get('/asignaciones/plantilla', [AsignacionController::class, 'plantilla'])->name('asignaciones.plantilla');
 Route::post('/asignaciones', [AsignacionController::class, 'store'])->name('asignaciones.store');
 Route::get('/asignaciones/{asignacion}', [AsignacionController::class, 'show'])->name('asignaciones.show');

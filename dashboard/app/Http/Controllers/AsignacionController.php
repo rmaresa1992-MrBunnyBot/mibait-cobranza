@@ -7,6 +7,8 @@ use App\Models\AsignacionCuenta;
 use App\Services\CargadorAsignacion;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use OpenSpout\Common\Entity\Row;
+use OpenSpout\Writer\XLSX\Writer as XlsxWriter;
 
 class AsignacionController extends Controller
 {
@@ -28,6 +30,26 @@ class AsignacionController extends Controller
     {
         $activa = Asignacion::where('activa', true)->first();
         return view('asignaciones.create', compact('activa'));
+    }
+
+    /** Descarga un .xlsx de ejemplo con el layout esperado. */
+    public function plantilla()
+    {
+        $tmp = storage_path('app/layout_cartera_'.uniqid().'.xlsx');
+        $writer = new XlsxWriter();
+        $writer->openToFile($tmp);
+        $writer->addRow(Row::fromValues(['Numero', 'Estatus', 'Fecha de entrega']));
+        foreach ([
+            ['5512345678', 'Con adeudo', '01/06/2026'],
+            ['3398765432', 'Con adeudo', '01/06/2026'],
+            ['8112223344', 'Con adeudo', '02/06/2026'],
+        ] as $fila) {
+            $writer->addRow(Row::fromValues($fila));
+        }
+        $writer->close();
+
+        return response()->download($tmp, 'layout_cartera_mibait.xlsx')
+            ->deleteFileAfterSend(true);
     }
 
     public function store(Request $request, CargadorAsignacion $cargador)
