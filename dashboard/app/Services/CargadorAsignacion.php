@@ -70,8 +70,7 @@ class CargadorAsignacion
             $insertadas = 0;
             $repetidas = [];
             $invalidas = [];
-            $duplicadas = 0;
-            $vistos = [];
+            $numeroIds = [];   // DN -> numero_id ya resuelto en esta carga
 
             foreach ($datos['rows'] as $i => $row) {
                 $numero = $this->limpiarNumero($this->celda($row, $map, 'numero'));
@@ -79,23 +78,26 @@ class CargadorAsignacion
                     $invalidas[] = ['fila' => $i + 2, 'valor' => $numero, 'motivo' => 'número inválido (10 dígitos)'];
                     continue;
                 }
-                if (isset($vistos[$numero])) {
-                    $duplicadas++;
-                    continue;
-                }
-                $vistos[$numero] = true;
 
-                $numModel = Numero::firstOrNew(['numero' => $numero]);
-                if ($numModel->exists) {
-                    $repetidas[] = $numero;
-                    $numModel->veces_asignado = ($numModel->veces_asignado ?? 0) + 1;
+                // Se guardan todas las emisiones (filas), pero el catálogo de
+                // números y el conteo de repetidas son por DN único.
+                if (isset($numeroIds[$numero])) {
+                    $numeroId = $numeroIds[$numero];
                 } else {
-                    $numModel->primera_vez_visto = now();
-                    $numModel->veces_asignado = 1;
+                    $numModel = Numero::firstOrNew(['numero' => $numero]);
+                    if ($numModel->exists) {
+                        $repetidas[] = $numero;   // existía en una carga anterior
+                        $numModel->veces_asignado = ($numModel->veces_asignado ?? 0) + 1;
+                    } else {
+                        $numModel->primera_vez_visto = now();
+                        $numModel->veces_asignado = 1;
+                    }
+                    $numModel->save();
+                    $numeroId = $numModel->id;
+                    $numeroIds[$numero] = $numeroId;
                 }
-                $numModel->save();
 
-                AsignacionCuenta::create($this->filaACuenta($asignacion->id, $numModel->id, $numero, $row, $map));
+                AsignacionCuenta::create($this->filaACuenta($asignacion->id, $numeroId, $numero, $row, $map));
                 $insertadas++;
             }
 
@@ -107,7 +109,7 @@ class CargadorAsignacion
                 'total' => count($datos['rows']),
                 'insertadas' => $insertadas,
                 'repetidas' => array_values(array_unique($repetidas)),
-                'duplicadas' => $duplicadas,
+                'duplicadas' => 0,
                 'invalidas' => $invalidas,
             ];
         });
@@ -117,6 +119,9 @@ class CargadorAsignacion
     private function filaACuenta(int $asignacionId, int $numeroId, string $numero, array $row, array $map): array
     {
         $estatus = $this->normalizarEstatus($this->celda($row, $map, 'estatus'));
+        // El monto del adeudo viene del archivo: fija el saldo de referencia,
+        // para detectar pagos desde la primera consulta del RPA.
+        $monto = $this->celdaDecimal($row, $map, 'monto_emision');
 
         return [
             'asignacion_id' => $asignacionId,
@@ -127,6 +132,8 @@ class CargadorAsignacion
             'estatus_cobranza' => 'con_adeudo',
             'tipo_linea' => 'desconocido',
             'cerrada' => false,
+            'saldo_referencia' => $monto,
+            'saldo_actual' => $monto,
             // datos de origen
             'fecha_emision' => $this->celdaFecha($row, $map, 'fecha_emision'),
             'mes_emision' => $this->celda($row, $map, 'mes_emision'),
