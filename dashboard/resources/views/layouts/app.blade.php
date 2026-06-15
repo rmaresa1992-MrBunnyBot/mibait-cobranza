@@ -16,6 +16,7 @@
         </a>
         <nav class="nav">
             <a href="{{ route('asignaciones.index') }}" class="{{ request()->routeIs('asignaciones.index') ? 'active' : '' }}">Asignaciones</a>
+            <a href="{{ route('metricas.index') }}" class="{{ request()->routeIs('metricas.index') ? 'active' : '' }}">Métricas</a>
             <a href="{{ route('asignaciones.create') }}" class="{{ request()->routeIs('asignaciones.create') ? 'active' : '' }}">Cargar cartera</a>
         </nav>
     </header>
