@@ -1,0 +1,74 @@
+@extends('layouts.app')
+@section('title', $asignacion->nombre)
+
+@section('content')
+<div class="page-head">
+    <div>
+        <div class="flex" style="gap:12px">
+            <h1>{{ $asignacion->nombre }}</h1>
+            <span class="chip {{ $asignacion->estado }}">{{ ucfirst($asignacion->estado) }}</span>
+        </div>
+        <p>Cargada el {{ $asignacion->fecha_carga?->format('d/m/Y') }} ·
+           origen {{ $asignacion->tipo_origen }} ·
+           {{ number_format($m['total']) }} cuentas</p>
+    </div>
+    <a href="{{ route('asignaciones.index') }}" class="btn">← Asignaciones</a>
+</div>
+
+@if ($r = session('resumen'))
+    <div class="alert ok">
+        Carga lista: <strong>{{ number_format($r['insertadas']) }}</strong> cuentas insertadas de {{ number_format($r['total']) }} filas.
+        @if ($r['repetidas']) · <strong>{{ $r['repetidas'] }}</strong> repetidas de otras carteras @endif
+        @if ($r['duplicadas']) · {{ $r['duplicadas'] }} duplicadas en el archivo @endif
+        @if (count($r['invalidas'])) · {{ count($r['invalidas']) }} filas inválidas ignoradas @endif
+    </div>
+@endif
+
+<div class="grid cards" style="margin-bottom:16px">
+    <div class="card metric"><div class="label">Cobrables</div><div class="value">{{ number_format($m['cobrables']) }}</div><div class="sub">{{ $m['prepago'] }} prepago · {{ $m['no_bait'] }} no Bait</div></div>
+    <div class="card metric"><div class="label">Pagadas</div><div class="value good">{{ number_format($m['pagadas']) }}</div><div class="sub">{{ $m['pct_pagadas'] }}% de cobrables</div></div>
+    <div class="card metric"><div class="label">Pago parcial</div><div class="value">{{ number_format($m['parciales']) }}</div><div class="sub">{{ number_format($m['adeudo']) }} con adeudo</div></div>
+    <div class="card metric"><div class="label">Monto recuperado</div><div class="value good">${{ number_format($m['monto_recuperado'], 0) }}</div><div class="sub">{{ $m['pct_monto'] }}% de ${{ number_format($m['monto_original'], 0) }}</div></div>
+    <div class="card metric"><div class="label">Repetidas</div><div class="value">{{ number_format($repetidas) }}</div><div class="sub">también en otras carteras</div></div>
+</div>
+
+<div class="panel">
+    <div class="panel-head">
+        <h2>Cuentas</h2>
+        <span class="faint">{{ $cuentas->total() }} en total</span>
+    </div>
+    <table>
+        <thead><tr>
+            <th>Número</th><th>Estatus</th><th>Tipo</th>
+            <th class="right">Saldo ref.</th><th class="right">Saldo actual</th>
+            <th>Entrega</th><th>Pago inferido</th><th>Últ. consulta</th>
+        </tr></thead>
+        <tbody>
+        @forelse ($cuentas as $c)
+            <tr>
+                <td class="num">{{ $c->numero }}</td>
+                <td><span class="chip {{ $c->estatus_cobranza }}">{{ str_replace('_',' ', $c->estatus_cobranza) }}</span></td>
+                <td class="muted">{{ $c->tipo_linea }}</td>
+                <td class="right mono">{{ is_null($c->saldo_referencia) ? '—' : '$'.number_format($c->saldo_referencia,2) }}</td>
+                <td class="right mono">{{ is_null($c->saldo_actual) ? '—' : '$'.number_format($c->saldo_actual,2) }}</td>
+                <td class="muted">{{ $c->fecha_entrega?->format('d/m/Y') ?? '—' }}</td>
+                <td class="muted">{{ $c->fecha_pago_inferida?->format('d/m/Y') ?? '—' }}</td>
+                <td class="muted">{{ $c->ultima_consulta_at?->format('d/m H:i') ?? '—' }}</td>
+            </tr>
+        @empty
+            <tr><td colspan="8" class="empty">Sin cuentas.</td></tr>
+        @endforelse
+        </tbody>
+    </table>
+</div>
+
+@if ($cuentas->hasPages())
+<div class="flex between" style="margin-top:16px">
+    <span class="faint">Página {{ $cuentas->currentPage() }} de {{ $cuentas->lastPage() }}</span>
+    <div class="flex">
+        @if ($cuentas->previousPageUrl())<a class="btn" href="{{ $cuentas->previousPageUrl() }}">← Anterior</a>@endif
+        @if ($cuentas->nextPageUrl())<a class="btn" href="{{ $cuentas->nextPageUrl() }}">Siguiente →</a>@endif
+    </div>
+</div>
+@endif
+@endsection

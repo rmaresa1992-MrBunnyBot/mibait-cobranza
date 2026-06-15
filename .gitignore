@@ -1,6 +1,7 @@
 # Python RPA
 rpa/.venv/
 rpa/.env
+rpa/capturas/
 **/__pycache__/
 *.pyc
 
