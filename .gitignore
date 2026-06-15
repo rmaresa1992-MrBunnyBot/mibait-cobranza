@@ -1,0 +1,12 @@
+# Python RPA
+rpa/.venv/
+rpa/.env
+**/__pycache__/
+*.pyc
+
+# Credenciales y entorno (el de dashboard lo cubre su propio .gitignore)
+**/.env
+
+# Sistema
+.DS_Store
+Thumbs.db
