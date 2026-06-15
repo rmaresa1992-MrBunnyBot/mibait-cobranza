@@ -8,6 +8,13 @@ rpa/capturas/
 # Credenciales y entorno (el de dashboard lo cubre su propio .gitignore)
 **/.env
 
+# Datos de cartera (sensibles, no versionar)
+*.xlsx
+*.xls
+
+# Utilidades temporales
+dashboard/inspeccionar_xlsx.php
+
 # Sistema
 .DS_Store
 Thumbs.db

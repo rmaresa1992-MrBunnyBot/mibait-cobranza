@@ -11,18 +11,42 @@ use OpenSpout\Reader\XLSX\Reader as XlsxReader;
 use OpenSpout\Reader\CSV\Reader as CsvReader;
 
 /**
- * Lee un Excel/CSV de cartera (layout: Numero, Estatus, Fecha de entrega),
- * crea la asignacion (nueva o complemento) y vincula el catalogo de numeros
- * detectando cuentas repetidas entre asignaciones.
+ * Lee un Excel/CSV de cartera y crea la asignacion (nueva o complemento),
+ * vinculando el catalogo de numeros y detectando repetidas.
+ *
+ * Soporta el layout real (NUMERO_TEL_CONTRATO, MONTO_EMISION, ...) y, por
+ * compatibilidad, el layout simple (Numero, Estatus, Fecha de entrega).
+ * El DN a consultar sale de numero_tel_contrato / numero.
  */
 class CargadorAsignacion
 {
-    /** Alias aceptados para cada columna del layout. */
+    /** clave en BD => alias de encabezado aceptados (ya normalizados). */
     private const COLS = [
-        'numero' => ['numero', 'numeros', 'telefono', 'linea', 'msisdn'],
+        'numero' => ['numero_tel_contrato', 'numero', 'num_telefono_ov', 'telefono', 'linea', 'msisdn'],
+        'fecha_emision' => ['fecha_emision'],
+        'mes_emision' => ['mes_emision'],
+        'monto_emision' => ['monto_emision', 'monto'],
+        'num_edo_cuenta' => ['num_edo_cuenta'],
+        'estatus_contrato' => ['estatus_contrato'],
+        'fecha_creacion_contrato' => ['fecha_creacion_contrato'],
+        'nva_ban_of' => ['nva_ban_of'],
+        'estatus_uf' => ['estatus_uf'],
+        'numero_tel_contrato' => ['numero_tel_contrato'],
+        'asignacion_origen' => ['asignacion'],
+        'pagos_mes' => ['pagos_en_mayo', 'pagos_mes', 'pagos'],
+        'num_telefono_ov' => ['num_telefono_ov'],
+        'flp' => ['flp'],
+        'reetiqueta' => ['reetiqueta'],
+        'ban_vencimiento' => ['ban_vencimiento'],
+        'ban_bracket_vencimiento' => ['ban_bracket_vencimiento'],
+        'asignada' => ['asignada'],
+        'canal' => ['canal'],
+        // layout simple (compatibilidad)
         'estatus' => ['estatus', 'status', 'estado'],
-        'fecha_entrega' => ['fecha_de_entrega', 'fecha_entrega', 'entrega', 'fecha'],
+        'fecha_entrega' => ['fecha_de_entrega', 'fecha_entrega', 'entrega'],
     ];
+
+    private const FECHAS = ['fecha_emision', 'fecha_creacion_contrato', 'flp', 'fecha_entrega'];
 
     private const ESTATUS = [
         'con adeudo' => 'con_adeudo',
@@ -30,44 +54,37 @@ class CargadorAsignacion
         'pago total' => 'pago_total',
     ];
 
-    /**
-     * @return array{asignacion: Asignacion, total: int, insertadas: int,
-     *   repetidas: array<string>, duplicadas: int, invalidas: array<array>}
-     */
     public function cargar(string $path, string $nombreArchivo, string $tipoOrigen, ?string $nombre = null): array
     {
-        $filas = $this->leer($path, $nombreArchivo);
-        if (empty($filas['map'])) {
+        $datos = $this->leer($path, $nombreArchivo);
+        if (! isset($datos['map']['numero'])) {
             throw new \RuntimeException(
-                'No se reconocieron las columnas. Se requieren: Numero, Estatus, Fecha de entrega.'
+                'No se encontró la columna del número (NUMERO_TEL_CONTRATO o Numero).'
             );
         }
+        $map = $datos['map'];
 
-        return DB::transaction(function () use ($filas, $nombreArchivo, $tipoOrigen, $nombre) {
+        return DB::transaction(function () use ($datos, $map, $nombreArchivo, $tipoOrigen, $nombre) {
             $asignacion = $this->resolverAsignacion($tipoOrigen, $nombreArchivo, $nombre);
 
             $insertadas = 0;
             $repetidas = [];
             $invalidas = [];
-            $vistosEnArchivo = [];
             $duplicadas = 0;
+            $vistos = [];
 
-            foreach ($filas['rows'] as $i => $row) {
-                $numero = $this->limpiarNumero($row[$filas['map']['numero']] ?? null);
+            foreach ($datos['rows'] as $i => $row) {
+                $numero = $this->limpiarNumero($this->celda($row, $map, 'numero'));
                 if (! preg_match('/^\d{10}$/', $numero)) {
-                    $invalidas[] = ['fila' => $i + 2, 'valor' => $numero, 'motivo' => 'número inválido (deben ser 10 dígitos)'];
+                    $invalidas[] = ['fila' => $i + 2, 'valor' => $numero, 'motivo' => 'número inválido (10 dígitos)'];
                     continue;
                 }
-                if (isset($vistosEnArchivo[$numero])) {
+                if (isset($vistos[$numero])) {
                     $duplicadas++;
                     continue;
                 }
-                $vistosEnArchivo[$numero] = true;
+                $vistos[$numero] = true;
 
-                $estatus = $this->normalizarEstatus($row[$filas['map']['estatus']] ?? null);
-                $fechaEntrega = $this->parsearFecha($row[$filas['map']['fecha_entrega']] ?? null);
-
-                // Catálogo de números: detectar si ya existía (repetida histórica).
                 $numModel = Numero::firstOrNew(['numero' => $numero]);
                 if ($numModel->exists) {
                     $repetidas[] = $numero;
@@ -78,16 +95,7 @@ class CargadorAsignacion
                 }
                 $numModel->save();
 
-                AsignacionCuenta::create([
-                    'asignacion_id' => $asignacion->id,
-                    'numero_id' => $numModel->id,
-                    'numero' => $numero,
-                    'fecha_entrega' => $fechaEntrega,
-                    'estatus_carga' => $estatus,
-                    'estatus_cobranza' => 'con_adeudo',
-                    'tipo_linea' => 'desconocido',
-                    'cerrada' => false,
-                ]);
+                AsignacionCuenta::create($this->filaACuenta($asignacion->id, $numModel->id, $numero, $row, $map));
                 $insertadas++;
             }
 
@@ -96,13 +104,49 @@ class CargadorAsignacion
 
             return [
                 'asignacion' => $asignacion,
-                'total' => count($filas['rows']),
+                'total' => count($datos['rows']),
                 'insertadas' => $insertadas,
                 'repetidas' => array_values(array_unique($repetidas)),
                 'duplicadas' => $duplicadas,
                 'invalidas' => $invalidas,
             ];
         });
+    }
+
+    /** Construye el arreglo de atributos de la cuenta a partir de la fila. */
+    private function filaACuenta(int $asignacionId, int $numeroId, string $numero, array $row, array $map): array
+    {
+        $estatus = $this->normalizarEstatus($this->celda($row, $map, 'estatus'));
+
+        return [
+            'asignacion_id' => $asignacionId,
+            'numero_id' => $numeroId,
+            'numero' => $numero,
+            'fecha_entrega' => $this->celdaFecha($row, $map, 'fecha_entrega'),
+            'estatus_carga' => $estatus,
+            'estatus_cobranza' => 'con_adeudo',
+            'tipo_linea' => 'desconocido',
+            'cerrada' => false,
+            // datos de origen
+            'fecha_emision' => $this->celdaFecha($row, $map, 'fecha_emision'),
+            'mes_emision' => $this->celda($row, $map, 'mes_emision'),
+            'monto_emision' => $this->celdaDecimal($row, $map, 'monto_emision'),
+            'num_edo_cuenta' => $this->celda($row, $map, 'num_edo_cuenta'),
+            'estatus_contrato' => $this->celda($row, $map, 'estatus_contrato'),
+            'fecha_creacion_contrato' => $this->celdaFecha($row, $map, 'fecha_creacion_contrato'),
+            'nva_ban_of' => $this->celda($row, $map, 'nva_ban_of'),
+            'estatus_uf' => $this->celda($row, $map, 'estatus_uf'),
+            'numero_tel_contrato' => $this->celda($row, $map, 'numero_tel_contrato'),
+            'asignacion_origen' => $this->celda($row, $map, 'asignacion_origen'),
+            'pagos_mes' => $this->celda($row, $map, 'pagos_mes'),
+            'num_telefono_ov' => $this->celda($row, $map, 'num_telefono_ov'),
+            'flp' => $this->celdaFecha($row, $map, 'flp'),
+            'reetiqueta' => $this->celda($row, $map, 'reetiqueta'),
+            'ban_vencimiento' => $this->celdaInt($row, $map, 'ban_vencimiento'),
+            'ban_bracket_vencimiento' => $this->celda($row, $map, 'ban_bracket_vencimiento'),
+            'asignada' => $this->celda($row, $map, 'asignada'),
+            'canal' => $this->celda($row, $map, 'canal'),
+        ];
     }
 
     private function resolverAsignacion(string $tipoOrigen, string $nombreArchivo, ?string $nombre): Asignacion
@@ -117,7 +161,6 @@ class CargadorAsignacion
             return $activa;
         }
 
-        // Nueva: archivar la activa y abrir otra.
         Asignacion::where('activa', true)->update(['activa' => false, 'estado' => 'archivada']);
         return Asignacion::create([
             'nombre' => $nombre ?: pathinfo($nombreArchivo, PATHINFO_FILENAME),
@@ -130,7 +173,6 @@ class CargadorAsignacion
         ]);
     }
 
-    /** Lee el archivo y devuelve filas + mapa de columnas. */
     private function leer(string $path, string $nombre): array
     {
         $reader = str_ends_with(strtolower($nombre), '.csv') ? new CsvReader() : new XlsxReader();
@@ -145,12 +187,11 @@ class CargadorAsignacion
                     $map = $this->mapearColumnas($cells);
                     continue;
                 }
-                if ($this->filaVacia($cells)) {
-                    continue;
+                if (! $this->filaVacia($cells)) {
+                    $rows[] = $cells;
                 }
-                $rows[] = $cells;
             }
-            break; // solo la primera hoja
+            break;
         }
         $reader->close();
 
@@ -163,42 +204,55 @@ class CargadorAsignacion
         $map = [];
         foreach (self::COLS as $clave => $alias) {
             foreach ($norm as $idx => $h) {
-                if (in_array($h, $alias, true)) {
+                if ($h !== '' && in_array($h, $alias, true)) {
                     $map[$clave] = $idx;
                     break;
                 }
             }
         }
-        return (isset($map['numero'])) ? $map : [];
+        return $map;
     }
 
     private function normalizar(?string $s): string
     {
-        $s = strtolower(trim((string) $s));
-        $s = strtr($s, ['á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ñ' => 'n']);
+        $s = trim((string) $s);
+        // Quitar acentos en ambos casos antes de bajar a minúsculas, porque
+        // strtolower/mb_strtolower no cubren bien mayúsculas acentuadas (Ó).
+        $s = strtr($s, [
+            'á' => 'a', 'é' => 'e', 'í' => 'i', 'ó' => 'o', 'ú' => 'u', 'ñ' => 'n', 'ü' => 'u',
+            'Á' => 'a', 'É' => 'e', 'Í' => 'i', 'Ó' => 'o', 'Ú' => 'u', 'Ñ' => 'n', 'Ü' => 'u',
+        ]);
+        $s = mb_strtolower($s, 'UTF-8');
         return preg_replace('/\s+/', '_', $s);
     }
 
-    private function limpiarNumero($valor): string
+    // ---- acceso a celdas por clave mapeada ----
+
+    private function raw(array $row, array $map, string $clave)
     {
-        if (is_float($valor) || is_int($valor)) {
-            $valor = number_format((float) $valor, 0, '', '');
-        }
-        return preg_replace('/\D/', '', (string) $valor);
+        return isset($map[$clave]) ? ($row[$map[$clave]] ?? null) : null;
     }
 
-    private function normalizarEstatus($valor): string
+    private function celda(array $row, array $map, string $clave): ?string
     {
-        $n = strtolower(trim((string) $valor));
-        return self::ESTATUS[$n] ?? 'con_adeudo';
+        $v = $this->raw($row, $map, $clave);
+        if ($v instanceof \DateTimeInterface) {
+            return $v->format('Y-m-d');
+        }
+        if (is_float($v) && floor($v) === $v) {
+            $v = (string) (int) $v;
+        }
+        $v = trim((string) $v);
+        return $v === '' ? null : $v;
     }
 
-    private function parsearFecha($valor): ?string
+    private function celdaFecha(array $row, array $map, string $clave): ?string
     {
-        if ($valor instanceof \DateTimeInterface) {
-            return Carbon::instance(\DateTime::createFromInterface($valor))->toDateString();
+        $v = $this->raw($row, $map, $clave);
+        if ($v instanceof \DateTimeInterface) {
+            return Carbon::instance(\DateTime::createFromInterface($v))->toDateString();
         }
-        $s = trim((string) $valor);
+        $s = trim((string) $v);
         if ($s === '') {
             return null;
         }
@@ -216,9 +270,42 @@ class CargadorAsignacion
         }
     }
 
+    private function celdaDecimal(array $row, array $map, string $clave): ?float
+    {
+        $v = $this->celda($row, $map, $clave);
+        if ($v === null) {
+            return null;
+        }
+        $v = preg_replace('/[^0-9.\-]/', '', $v);
+        return $v === '' ? null : (float) $v;
+    }
+
+    private function celdaInt(array $row, array $map, string $clave): ?int
+    {
+        $v = $this->celdaDecimal($row, $map, $clave);
+        return $v === null ? null : (int) $v;
+    }
+
+    private function limpiarNumero($valor): string
+    {
+        if (is_float($valor) || is_int($valor)) {
+            $valor = number_format((float) $valor, 0, '', '');
+        }
+        return preg_replace('/\D/', '', (string) $valor);
+    }
+
+    private function normalizarEstatus($valor): string
+    {
+        $n = strtolower(trim((string) $valor));
+        return self::ESTATUS[$n] ?? 'con_adeudo';
+    }
+
     private function filaVacia(array $cells): bool
     {
         foreach ($cells as $c) {
+            if ($c instanceof \DateTimeInterface) {
+                return false;
+            }
             if (trim((string) $c) !== '') {
                 return false;
             }
