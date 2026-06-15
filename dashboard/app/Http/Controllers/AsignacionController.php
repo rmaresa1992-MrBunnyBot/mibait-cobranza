@@ -60,17 +60,23 @@ class AsignacionController extends Controller
             ]);
     }
 
-    public function show(Asignacion $asignacion)
+    public function show(Request $request, Asignacion $asignacion)
     {
         $m = $this->metricas($asignacion->id);
         $repetidas = $this->repetidasEntreAsignaciones($asignacion->id);
 
+        $q = preg_replace('/\D/', '', (string) $request->input('q'));
+        $estatus = $request->input('estatus');
+
         $cuentas = $asignacion->cuentas()
+            ->when($q !== '', fn ($w) => $w->where('numero', 'like', "%{$q}%"))
+            ->when($estatus, fn ($w) => $w->where('estatus_cobranza', $estatus))
             ->orderByRaw("CASE estatus_cobranza WHEN 'con_adeudo' THEN 0 WHEN 'pago_parcial' THEN 1 ELSE 2 END")
             ->orderBy('numero')
-            ->paginate(50);
+            ->paginate(50)
+            ->withQueryString();
 
-        return view('asignaciones.show', compact('asignacion', 'm', 'repetidas', 'cuentas'));
+        return view('asignaciones.show', compact('asignacion', 'm', 'repetidas', 'cuentas', 'q', 'estatus'));
     }
 
     /** Métricas agregadas de una asignación. */

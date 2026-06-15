@@ -34,8 +34,20 @@
 
 <div class="panel">
     <div class="panel-head">
-        <h2>Cuentas</h2>
-        <span class="faint">{{ $cuentas->total() }} en total</span>
+        <h2>Cuentas <span class="faint" style="font-weight:500">· {{ number_format($cuentas->total()) }}{{ ($q || $estatus) ? ' encontradas' : '' }}</span></h2>
+        <form method="GET" class="flex" style="gap:8px">
+            <input type="text" name="q" value="{{ $q }}" placeholder="Buscar por DN…" inputmode="numeric" style="width:180px" autofocus>
+            <select name="estatus" onchange="this.form.submit()">
+                <option value="">Todos los estatus</option>
+                <option value="con_adeudo" @selected($estatus==='con_adeudo')>Con adeudo</option>
+                <option value="pago_parcial" @selected($estatus==='pago_parcial')>Pago parcial</option>
+                <option value="pago_total" @selected($estatus==='pago_total')>Pago total</option>
+            </select>
+            <button class="btn" type="submit">Buscar</button>
+            @if ($q || $estatus)
+                <a class="btn" href="{{ route('asignaciones.show', $asignacion) }}">Limpiar</a>
+            @endif
+        </form>
     </div>
     <table>
         <thead><tr>
