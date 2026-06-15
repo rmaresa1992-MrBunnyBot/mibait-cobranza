@@ -85,6 +85,7 @@ class AsignacionController extends Controller
     public function show(Request $request, Asignacion $asignacion)
     {
         $m = $this->metricas($asignacion->id);
+        $indicadores = $this->indicadoresBase($asignacion->id);
         $repetidas = $this->repetidasEntreAsignaciones($asignacion->id);
 
         $q = preg_replace('/\D/', '', (string) $request->input('q'));
@@ -98,7 +99,32 @@ class AsignacionController extends Controller
             ->paginate(50)
             ->withQueryString();
 
-        return view('asignaciones.show', compact('asignacion', 'm', 'repetidas', 'cuentas', 'q', 'estatus'));
+        return view('asignaciones.show', compact('asignacion', 'm', 'indicadores', 'repetidas', 'cuentas', 'q', 'estatus'));
+    }
+
+    /** Indicadores principales de la cartera (campos de origen del layout). */
+    private function indicadoresBase(int $id): array
+    {
+        $base = fn () => DB::table('asignacion_cuentas')->where('asignacion_id', $id);
+
+        $tot = $base()->selectRaw(
+            'COUNT(*) AS emisiones, COUNT(DISTINCT numero) AS dn, SUM(monto_emision) AS monto'
+        )->first();
+
+        $dist = fn (string $col) => $base()
+            ->selectRaw("$col AS k, COUNT(*) AS n")
+            ->whereNotNull($col)
+            ->groupBy($col)->orderByRaw('COUNT(*) DESC')->get()
+            ->map(fn ($r) => ['k' => $r->k, 'n' => (int) $r->n]);
+
+        return [
+            'emisiones' => (int) $tot->emisiones,
+            'dn' => (int) $tot->dn,
+            'monto' => (float) $tot->monto,
+            'reetiqueta' => $dist('reetiqueta'),
+            'estatus_contrato' => $dist('estatus_contrato'),
+            'bracket' => $dist('ban_bracket_vencimiento'),
+        ];
     }
 
     /** Métricas agregadas de una asignación. */

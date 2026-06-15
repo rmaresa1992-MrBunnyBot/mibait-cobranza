@@ -32,6 +32,42 @@
     <div class="card metric"><div class="label">Repetidas</div><div class="value">{{ number_format($repetidas) }}</div><div class="sub">también en otras carteras</div></div>
 </div>
 
+@php
+    $emis = max(1, $indicadores['emisiones']);
+    $dists = [
+        'Reetiqueta' => $indicadores['reetiqueta'],
+        'Estatus de contrato' => $indicadores['estatus_contrato'],
+        'Bracket de vencimiento' => $indicadores['bracket'],
+    ];
+@endphp
+
+<div class="grid cards" style="margin-bottom:16px">
+    <div class="card metric"><div class="label">Adeudo total</div><div class="value warn">${{ number_format($indicadores['monto'], 0) }}</div><div class="sub">monto de emisión</div></div>
+    <div class="card metric"><div class="label">Números únicos</div><div class="value">{{ number_format($indicadores['dn']) }}</div><div class="sub">DN distintos</div></div>
+    <div class="card metric"><div class="label">Emisiones</div><div class="value">{{ number_format($indicadores['emisiones']) }}</div><div class="sub">filas de cartera</div></div>
+</div>
+
+<div class="grid" style="grid-template-columns: repeat(3, 1fr); margin-bottom:16px; align-items:start">
+    @foreach ($dists as $titulo => $dist)
+    <div class="panel">
+        <div class="panel-head"><h2>{{ $titulo }}</h2></div>
+        <div style="padding:16px 20px">
+            @forelse ($dist as $d)
+                <div style="margin-bottom:12px">
+                    <div class="flex between" style="margin-bottom:5px">
+                        <span style="font-size:13px">{{ $d['k'] }}</span>
+                        <span class="mono faint" style="font-size:12px">{{ number_format($d['n']) }} · {{ round($d['n'] / $emis * 100) }}%</span>
+                    </div>
+                    <div class="bar"><i style="width:{{ $d['n'] / $emis * 100 }}%"></i></div>
+                </div>
+            @empty
+                <div class="faint" style="font-size:13px">Sin datos.</div>
+            @endforelse
+        </div>
+    </div>
+    @endforeach
+</div>
+
 <div class="panel">
     <div class="panel-head">
         <h2>Cuentas <span class="faint" style="font-weight:500">· {{ number_format($cuentas->total()) }}{{ ($q || $estatus) ? ' encontradas' : '' }}</span></h2>
