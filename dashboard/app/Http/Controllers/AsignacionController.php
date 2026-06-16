@@ -32,17 +32,22 @@ class AsignacionController extends Controller
         return view('asignaciones.create', compact('activa'));
     }
 
-    /** Descarga un .xlsx de ejemplo con el layout esperado. */
+    /** Descarga un .xlsx de ejemplo con el layout real de cartera. */
     public function plantilla()
     {
         $tmp = storage_path('app/layout_cartera_'.uniqid().'.xlsx');
         $writer = new XlsxWriter();
         $writer->openToFile($tmp);
-        $writer->addRow(Row::fromValues(['Numero', 'Estatus', 'Fecha de entrega']));
+        $writer->addRow(Row::fromValues([
+            'FECHA_EMISION', 'MES_EMISION', 'MONTO_EMISION', 'NUM_EDO_CUENTA',
+            'ESTATUS_CONTRATO', 'FECHA_CREACION_CONTRATO', 'nva_ban_of', 'ESTATUS_UF',
+            'NUMERO_TEL_CONTRATO', '', 'ASIGNACIÓN', 'PAGOS EN MAYO', 'NUM_TELEFONO_OV',
+            'FLP', 'REETIQUETA', 'BAN_VENCIMIENTO', 'BAN_BRACKET_VENCIMIENTO',
+            'ASIGNADA', 'CANAL',
+        ]));
         foreach ([
-            ['5512345678', 'Con adeudo', '01/06/2026'],
-            ['3398765432', 'Con adeudo', '01/06/2026'],
-            ['8112223344', 'Con adeudo', '02/06/2026'],
+            ['30/04/2026', 'Abril', '199', '5', 'Suspendido', '11/12/2025', 'Oferta Pospago', 'Barring', '5512345678', '', 'PRIMER ASIGNACION', '', '5512345678', '11/05/2026', 'Cartera Vencida', '22', '0_30', 'Asignada Grupo Concentra', 'Proceso Batch'],
+            ['31/05/2026', 'Mayo', '199', '6', 'Activo', '11/12/2025', 'Oferta Pospago', 'Barring', '3398765432', '', 'PRIMER ASIGNACION', '', '3398765432', '11/06/2026', 'Cartera Corriente', '9', '0_30', 'Asignada Grupo Concentra', 'Proceso Batch'],
         ] as $fila) {
             $writer->addRow(Row::fromValues($fila));
         }

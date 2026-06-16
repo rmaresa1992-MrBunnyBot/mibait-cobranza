@@ -110,6 +110,9 @@ tbody tr:hover { background: var(--bg-elev-2); }
 .chip.no_bait { color: var(--danger); background: rgba(240,109,109,.1); border-color: rgba(240,109,109,.2); }
 .chip.activa { color: var(--accent); background: rgba(74,208,168,.12); border-color: rgba(74,208,168,.22); }
 .chip.archivada { color: var(--text-faint); background: rgba(101,116,138,.1); border-color: rgba(101,116,138,.2); }
+.chip.buen_pagador { color: var(--accent); background: rgba(74,208,168,.12); border-color: rgba(74,208,168,.22); }
+.chip.irregular { color: var(--warn); background: rgba(240,180,80,.1); border-color: rgba(240,180,80,.2); }
+.chip.moroso { color: var(--danger); background: rgba(240,109,109,.1); border-color: rgba(240,109,109,.2); }
 
 /* ---------- botones / form ---------- */
 .btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: var(--radius-sm); font-weight: 600; font-size: 13px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-elev-2); color: var(--text); transition: .15s; }

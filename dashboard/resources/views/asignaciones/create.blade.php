@@ -5,7 +5,7 @@
 <div class="page-head">
     <div>
         <h1>Cargar cartera</h1>
-        <p>Layout esperado: columnas <strong>Numero</strong>, <strong>Estatus</strong> y <strong>Fecha de entrega</strong>. Formato .xlsx o .csv.</p>
+        <p>Sube el archivo de cartera con el layout estándar (el DN se toma de <strong>NUMERO_TEL_CONTRATO</strong> y el adeudo de <strong>MONTO_EMISION</strong>). Descarga el ejemplo para ver las columnas. Formato .xlsx o .csv.</p>
     </div>
     <a href="{{ route('asignaciones.plantilla') }}" class="btn">⭳ Descargar ejemplo (.xlsx)</a>
 </div>
