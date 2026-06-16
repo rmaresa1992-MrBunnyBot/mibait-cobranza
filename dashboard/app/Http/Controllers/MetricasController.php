@@ -7,38 +7,61 @@ use Illuminate\Support\Facades\DB;
 
 class MetricasController extends Controller
 {
+    private const HORIZONTE = 30; // días de cierre de una cartera (un mes)
+
     public function index()
     {
-        // Asignación foco: la activa por defecto, o ?asignacion=ID.
-        $foco = request('asignacion')
-            ? Asignacion::find(request('asignacion'))
-            : Asignacion::where('activa', true)->first();
-        $foco = $foco ?: Asignacion::orderByDesc('fecha_carga')->first();
+        $opciones = Asignacion::orderByDesc('fecha_carga')->orderByDesc('id')
+            ->get(['id', 'nombre', 'activa', 'fecha_carga']);
 
-        if (! $foco) {
-            return view('metricas.index', ['foco' => null]);
+        // Selección múltiple (?asignacion[]=). Por defecto, las 2 más recientes.
+        $sel = array_map('intval', (array) request('asignacion', []));
+        if (empty($sel)) {
+            $sel = $opciones->take(2)->pluck('id')->all();
         }
 
-        // Asignación anterior: la archivada cargada justo antes del foco.
-        $anterior = Asignacion::where('id', '!=', $foco->id)
-            ->where('fecha_carga', '<=', $foco->fecha_carga)
-            ->orderByDesc('fecha_carga')->orderByDesc('id')->first();
+        $seleccionadas = $opciones->whereIn('id', $sel)->sortBy('fecha_carga')->values();
+        if ($seleccionadas->isEmpty()) {
+            return view('metricas.index', ['foco' => null, 'opciones' => $opciones, 'sel' => $sel]);
+        }
 
-        $serieFoco = $this->serie($foco);
-        $serieAnterior = $anterior ? $this->serie($anterior) : null;
-        $kpis = $this->kpis($foco, $serieFoco);
-        $repetidas = $this->repetidasHistorico($foco->id);
-        $opciones = Asignacion::orderByDesc('fecha_carga')->get(['id', 'nombre', 'activa']);
+        $series = [];
+        foreach ($seleccionadas as $a) {
+            $puntos = $this->serie($a);
+            $series[$a->id] = [
+                'id' => $a->id,
+                'nombre' => $a->nombre,
+                'puntos' => $puntos,
+                'adeudo' => $this->adeudo($a->id),
+                'final' => empty($puntos) ? 0.0 : end($puntos)['acumulado'],
+            ];
+        }
+
+        // Foco de proyección: la más reciente seleccionada.
+        $foco = $seleccionadas->sortByDesc('fecha_carga')->first();
+        $focoSerie = $series[$foco->id];
+
+        // Mejor mes: entre las otras seleccionadas, la de mayor % recuperado.
+        $mejor = null;
+        foreach ($seleccionadas as $a) {
+            if ($a->id === $foco->id) {
+                continue;
+            }
+            $s = $series[$a->id];
+            $pct = $s['adeudo'] > 0 ? $s['final'] / $s['adeudo'] : 0;
+            if ($mejor === null || $pct > $mejor['pct']) {
+                $mejor = ['id' => $a->id, 'nombre' => $a->nombre, 'pct' => $pct, 'serie' => $s];
+            }
+        }
+
+        $proy = $this->proyecciones($focoSerie, $mejor);
 
         return view('metricas.index', compact(
-            'foco', 'anterior', 'serieFoco', 'serieAnterior', 'kpis', 'repetidas', 'opciones'
+            'opciones', 'seleccionadas', 'series', 'foco', 'mejor', 'proy', 'sel'
         ));
     }
 
-    /**
-     * Serie de recuperación de una asignación: por día con pagos, el monto y
-     * conteo del día, el acumulado, y el offset de días desde la carga.
-     */
+    /** Serie de recuperación acumulada por día desde la carga. */
     private function serie(Asignacion $a): array
     {
         $rows = DB::select(
@@ -47,8 +70,7 @@ class MetricasController extends Controller
              FROM eventos_pago e
              JOIN asignacion_cuentas c ON c.id = e.asignacion_cuenta_id
              WHERE c.asignacion_id = ?
-             GROUP BY CAST(e.fecha_deteccion AS date)
-             ORDER BY dia",
+             GROUP BY CAST(e.fecha_deteccion AS date) ORDER BY dia",
             [$a->id]
         );
 
@@ -59,8 +81,7 @@ class MetricasController extends Controller
             $acum += (float) $r->monto;
             $dia = \Carbon\Carbon::parse($r->dia);
             $puntos[] = [
-                'fecha' => $dia->toDateString(),
-                'offset' => $carga ? $carga->diffInDays($dia) : count($puntos),
+                'offset' => $carga ? (int) $carga->diffInDays($dia) : count($puntos),
                 'monto_dia' => (float) $r->monto,
                 'pagos_dia' => (int) $r->pagos,
                 'acumulado' => round($acum, 2),
@@ -69,67 +90,85 @@ class MetricasController extends Controller
         return $puntos;
     }
 
-    private function kpis(Asignacion $a, array $serie): array
+    private function adeudo(int $id): float
     {
-        $mejor = null;
-        foreach ($serie as $p) {
-            if ($mejor === null || $p['monto_dia'] > $mejor['monto_dia']) {
-                $mejor = $p;
-            }
-        }
-
-        // Velocidad: días promedio entre entrega y pago inferido.
-        $velocidad = DB::select(
-            "SELECT AVG(CAST(DATEDIFF(day, fecha_entrega, fecha_pago_inferida) AS float)) AS dias
-             FROM asignacion_cuentas
-             WHERE asignacion_id = ? AND fecha_pago_inferida IS NOT NULL
-               AND fecha_entrega IS NOT NULL",
-            [$a->id]
-        )[0]->dias ?? null;
-
-        $original = (float) DB::table('asignacion_cuentas')
-            ->where('asignacion_id', $a->id)
+        return (float) DB::table('asignacion_cuentas')
+            ->where('asignacion_id', $id)
             ->whereIn('tipo_linea', ['bait', 'desconocido'])
             ->sum('saldo_referencia');
-        $recuperado = empty($serie) ? 0.0 : end($serie)['acumulado'];
-
-        return [
-            'recuperado' => $recuperado,
-            'original' => $original,
-            'pct' => $original > 0 ? round($recuperado / $original * 100, 1) : 0.0,
-            'pagos' => array_sum(array_column($serie, 'pagos_dia')),
-            'mejor_dia' => $mejor,
-            'velocidad' => $velocidad !== null ? round($velocidad, 1) : null,
-        ];
     }
 
-    /** Cuentas del foco que también aparecen en otras asignaciones, con su historia. */
-    private function repetidasHistorico(int $focoId): array
+    /** % recuperado del mejor mes en el día d (curva escalón). */
+    private function pctEnDia(array $puntos, float $adeudo, int $d): float
     {
-        $numeros = DB::table('asignacion_cuentas')
-            ->select('numero')
-            ->where('asignacion_id', $focoId)
-            ->whereIn('numero', function ($q) use ($focoId) {
-                $q->select('numero')->from('asignacion_cuentas')
-                    ->where('asignacion_id', '!=', $focoId);
-            })
-            ->distinct()->limit(100)->pluck('numero');
+        $acum = 0.0;
+        foreach ($puntos as $p) {
+            if ($p['offset'] <= $d) {
+                $acum = $p['acumulado'];
+            } else {
+                break;
+            }
+        }
+        return $adeudo > 0 ? $acum / $adeudo : 0.0;
+    }
 
-        if ($numeros->isEmpty()) {
-            return [];
+    /**
+     * Dos proyecciones del cierre del foco al horizonte de un mes:
+     *  A) siguiendo la curva del mejor mes (escalada al adeudo del foco),
+     *  B) extrapolando el ritmo actual del foco.
+     */
+    private function proyecciones(array $foco, ?array $mejor): array
+    {
+        $H = self::HORIZONTE;
+        $puntos = $foco['puntos'];
+        $adeudo = $foco['adeudo'];
+        $t = empty($puntos) ? 0 : end($puntos)['offset'];
+        $recup = empty($puntos) ? 0.0 : end($puntos)['acumulado'];
+        $tasa = $t > 0 ? $recup / $t : 0.0;
+
+        // B: ritmo actual (recta de hoy al cierre).
+        $cierreB = min($adeudo, $recup + $tasa * max(0, $H - $t));
+        $bPts = [];
+        if ($t < $H) {
+            $bPts = [['x' => $t, 'y' => round($recup, 2)], ['x' => $H, 'y' => round($cierreB, 2)]];
         }
 
-        $rows = DB::table('asignacion_cuentas as c')
-            ->join('asignaciones as a', 'a.id', '=', 'c.asignacion_id')
-            ->whereIn('c.numero', $numeros)
-            ->orderBy('c.numero')->orderBy('a.fecha_carga')
-            ->get(['c.numero', 'a.nombre', 'a.fecha_carga', 'c.estatus_cobranza',
-                   'c.fecha_pago_inferida', 'c.asignacion_id']);
+        // A: forma del mejor mes escalada al adeudo del foco.
+        $aPts = [];
+        $cierreA = 0.0;
+        $tasaMejorDia = 0.0;
+        if ($mejor) {
+            $mp = $mejor['serie']['puntos'];
+            $adM = $mejor['serie']['adeudo'];
+            $diasMejor = empty($mp) ? 1 : max(1, end($mp)['offset']);
+            $tasaMejorDia = $adeudo > 0 && $diasMejor > 0
+                ? ($adeudo * $mejor['pct']) / $diasMejor : 0.0;
 
-        $hist = [];
-        foreach ($rows as $r) {
-            $hist[$r->numero][] = $r;
+            $dias = collect($mp)->pluck('offset')->filter(fn ($d) => $d <= $H)
+                ->push($H)->unique()->sort()->values();
+            foreach ($dias as $d) {
+                $aPts[] = ['x' => $d, 'y' => round($adeudo * $this->pctEnDia($mp, $adM, $d), 2)];
+            }
+            $cierreA = $adeudo * $this->pctEnDia($mp, $adM, $H);
         }
-        return $hist;
+
+        return [
+            'horizonte' => $H,
+            't' => $t,
+            'recuperado' => $recup,
+            'adeudo' => $adeudo,
+            'pct_actual_hoy' => $adeudo > 0 ? round($recup / $adeudo * 100, 1) : 0,
+            'tasa_dia' => $tasa,
+            'tasa_dia_pct' => $adeudo > 0 ? round($tasa / $adeudo * 100, 2) : 0,
+            'tasa_mejor_dia' => $tasaMejorDia,
+            'tasa_mejor_dia_pct' => $adeudo > 0 ? round($tasaMejorDia / $adeudo * 100, 2) : 0,
+            'cierre_actual' => $cierreB,
+            'pct_cierre_actual' => $adeudo > 0 ? round($cierreB / $adeudo * 100, 1) : 0,
+            'cierre_mejor' => $cierreA,
+            'pct_cierre_mejor' => $adeudo > 0 ? round($cierreA / $adeudo * 100, 1) : 0,
+            'brecha' => round($cierreA - $cierreB, 2),
+            'a_pts' => $aPts,
+            'b_pts' => $bPts,
+        ];
     }
 }
