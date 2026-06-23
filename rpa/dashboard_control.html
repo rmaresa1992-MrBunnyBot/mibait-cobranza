@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MiBait · Control del Bot</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c232d;
+    --border: #2a323d;
+    --txt: #e6edf3;
+    --muted: #8b949e;
+    --accent: #2f81f7;
+    --green: #2ea043;
+    --green-soft: #1f6f33;
+    --red: #da3633;
+    --amber: #d29922;
+    --shadow: 0 10px 30px rgba(0,0,0,.45);
+    --r: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background:
+      radial-gradient(1200px 600px at 85% -10%, rgba(47,129,247,.10), transparent 60%),
+      radial-gradient(900px 500px at -5% 110%, rgba(46,160,67,.08), transparent 55%),
+      var(--bg);
+    color: var(--txt);
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    min-height: 100vh; padding: 32px 20px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 26px; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .logo {
+    width: 42px; height: 42px; border-radius: 12px; flex: none;
+    background: linear-gradient(135deg, var(--accent), #1f6feb);
+    display: grid; place-items: center; font-weight: 800; font-size: 20px;
+    box-shadow: var(--shadow); letter-spacing: -1px;
+  }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -.3px; }
+  .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px; font-size: 13px;
+    font-weight: 600; padding: 8px 14px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .pill.run .dot { background: var(--green); box-shadow: 0 0 0 0 rgba(46,160,67,.7); animation: pulse 1.6s infinite; }
+  .pill.run { color: #7ee2a8; border-color: var(--green-soft); }
+  .pill.idle { color: var(--muted); }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 8px rgba(46,160,67,0); } 100% { box-shadow: 0 0 0 0 rgba(46,160,67,0); } }
+
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+  .card {
+    background: linear-gradient(180deg, var(--panel), var(--panel-2));
+    border: 1px solid var(--border); border-radius: var(--r); padding: 18px 16px;
+    box-shadow: var(--shadow); position: relative; overflow: hidden;
+  }
+  .card .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; }
+  .card .v { font-size: 30px; font-weight: 750; margin-top: 8px; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+  .card.accent .v { color: #79b8ff; }
+  .card.green .v { color: #7ee2a8; }
+  .card.amber .v { color: #e3b341; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--r);
+    padding: 20px; box-shadow: var(--shadow); margin-bottom: 18px;
+  }
+  .panel h2 { font-size: 14px; margin: 0 0 16px; color: var(--muted); text-transform: uppercase; letter-spacing: .7px; }
+
+  .bar { height: 10px; border-radius: 999px; background: #0a0e14; border: 1px solid var(--border); overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--green)); transition: width .6s ease; }
+  .bar-meta { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+
+  .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 650; cursor: pointer; border: 1px solid var(--border);
+    color: var(--txt); background: var(--panel-2); padding: 11px 20px; border-radius: 10px;
+    transition: transform .08s ease, filter .15s ease, background .15s; display: inline-flex; align-items: center; gap: 9px;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.15); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-start { background: var(--green-soft); border-color: #2ea04366; }
+  .btn-stop { background: #5c1f1f; border-color: #da363366; }
+  input, select {
+    font: inherit; color: var(--txt); background: #0a0e14; border: 1px solid var(--border);
+    border-radius: 9px; padding: 9px 11px; width: 100%;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .lim { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; margin-left: auto; }
+  .lim input { width: 110px; }
+
+  .cfg { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  .cfg-foot { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+
+  pre {
+    background: #0a0e14; border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; color: #b9c2cc;
+    max-height: 230px; overflow: auto; white-space: pre-wrap; margin: 0;
+  }
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--txt);
+    padding: 12px 18px; border-radius: 10px; box-shadow: var(--shadow); font-size: 13.5px;
+    opacity: 0; transition: all .3s ease; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: var(--red); color: #ffb4b1; }
+  @media (max-width: 760px) { .grid, .cfg { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">Mb</div>
+      <div>
+        <h1>Control del Bot de Cobranza</h1>
+        <div class="sub" id="asig">Asignación: —</div>
+      </div>
+    </div>
+    <div class="pill idle" id="pill"><span class="dot"></span><span id="pillTxt">Detenido</span></div>
+  </header>
+
+  <div class="grid">
+    <div class="card accent"><div class="k">Pendientes</div><div class="v" id="m-pend">—</div></div>
+    <div class="card green"><div class="k">Consultadas</div><div class="v" id="m-cons">—</div></div>
+    <div class="card amber"><div class="k">Por hora</div><div class="v" id="m-hora">—</div></div>
+    <div class="card"><div class="k">Total activas</div><div class="v" id="m-total">—</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Progreso de la cartera</h2>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="bar-meta"><span id="bar-l">0 consultadas</span><span id="bar-r">actualizado —</span></div>
+  </div>
+
+  <div class="panel">
+    <h2>Operación</h2>
+    <div class="controls">
+      <button class="btn-start" id="btnStart">▶ Arrancar consultas</button>
+      <button class="btn-stop" id="btnStop" disabled>■ Detener bot</button>
+      <span class="lim">Límite (opcional) <input type="number" id="limite" min="1" placeholder="todas"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Configuración</h2>
+    <div class="cfg" id="cfg"></div>
+    <div class="cfg-foot">
+      <button id="btnCfg">Guardar configuración</button>
+      <span class="sub">Se aplica en la próxima corrida del bot.</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Bitácora del bot</h2>
+    <pre id="log">(sin actividad todavía)</pre>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (p, m='GET', b) => fetch(p, {method:m, headers:{'Content-Type':'application/json'}, body: b?JSON.stringify(b):undefined}).then(r=>r.json());
+
+function toast(msg, err=false) {
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast show' + (err?' err':'');
+  clearTimeout(t._t); t._t = setTimeout(()=>t.className='toast', 2600);
+}
+
+async function refresh() {
+  try {
+    const s = await api('/api/status');
+    if (s.error) return;
+    const run = s.running;
+    $('#pill').className = 'pill ' + (run?'run':'idle');
+    $('#pillTxt').textContent = run ? 'Consultando' : 'Detenido';
+    $('#btnStart').disabled = run;
+    $('#btnStop').disabled = !run;
+    $('#asig').textContent = 'Asignación: ' + (s.asignacion || '—');
+    if (s.total != null) {
+      $('#m-pend').textContent  = s.pendientes.toLocaleString('es-MX');
+      $('#m-cons').textContent  = s.consultadas.toLocaleString('es-MX');
+      $('#m-hora').textContent  = s.por_hora.toLocaleString('es-MX');
+      $('#m-total').textContent = s.total.toLocaleString('es-MX');
+      const pct = s.total ? Math.round(s.consultadas / s.total * 100) : 0;
+      $('#bar').style.width = pct + '%';
+      $('#bar-l').textContent = s.consultadas.toLocaleString('es-MX') + ' de ' + s.total.toLocaleString('es-MX') + ' (' + pct + '%)';
+      $('#bar-r').textContent = 'actualizado ' + (s.ts || '');
+    }
+  } catch(e){}
+}
+
+async function refreshLog() {
+  try { const r = await api('/api/log'); if (r.log!=null) $('#log').textContent = r.log || '(sin actividad todavía)'; } catch(e){}
+}
+
+async function loadConfig() {
+  const items = await api('/api/config');
+  $('#cfg').innerHTML = items.map(it => `
+    <div class="field">
+      <label>${it.desc}</label>
+      <input data-clave="${it.clave}" value="${(it.valor??'').replace(/"/g,'&quot;')}">
+    </div>`).join('');
+}
+
+$('#btnStart').onclick = async () => {
+  const lim = $('#limite').value.trim();
+  const r = await api('/api/start','POST',{limite: lim||null});
+  toast(r.msg || r.error, !r.ok); refresh(); refreshLog();
+};
+$('#btnStop').onclick = async () => {
+  const r = await api('/api/stop','POST',{});
+  toast(r.msg || r.error, !r.ok); refresh();
+};
+$('#btnCfg').onclick = async () => {
+  const items = [...document.querySelectorAll('#cfg input')].map(i => ({clave:i.dataset.clave, valor:i.value}));
+  const r = await api('/api/config','POST',{items});
+  toast(r.msg || r.error, !r.ok);
+};
+
+loadConfig();
+refresh(); refreshLog();
+setInterval(refresh, 3000);
+setInterval(refreshLog, 5000);
+</script>
+</body>
+</html>
