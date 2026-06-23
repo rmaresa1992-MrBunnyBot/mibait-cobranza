@@ -179,7 +179,9 @@ async function refresh() {
     if (s.error) return;
     const run = s.running;
     $('#pill').className = 'pill ' + (run?'run':'idle');
-    $('#pillTxt').textContent = run ? 'Consultando' : 'Detenido';
+    $('#pillTxt').textContent = run
+      ? ('Consultando · ' + (s.workers || 1) + ' worker' + ((s.workers>1)?'s':''))
+      : 'Detenido';
     $('#btnStart').disabled = run;
     $('#btnStop').disabled = !run;
     $('#asig').textContent = 'Asignación: ' + (s.asignacion || '—');

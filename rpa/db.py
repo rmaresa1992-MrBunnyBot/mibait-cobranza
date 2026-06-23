@@ -32,7 +32,11 @@ def connection_string() -> str:
 
 
 def connect() -> pyodbc.Connection:
-    return pyodbc.connect(connection_string())
+    # autocommit=True es OBLIGATORIO al escribir en la base real via linked
+    # server: sin transaccion local envolvente, el INSERT/UPDATE remoto no se
+    # promueve a transaccion distribuida (MSDTC), que no esta configurado entre
+    # 10.80.11.70\DEV y 10.80.11.72\INTELIX y haria fallar toda escritura (7391).
+    return pyodbc.connect(connection_string(), autocommit=True)
 
 
 @contextmanager

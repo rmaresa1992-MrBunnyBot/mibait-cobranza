@@ -35,11 +35,18 @@ def cuentas_pendientes(cur, asignacion_id):
 
 
 def crear_corrida(cur, asignacion_id, inicio, concurrencia):
-    row = cur.execute(
-        f"INSERT INTO {tabla('corridas_rpa')} (asignacion_id, inicio, estado, "
-        "concurrencia, created_at, updated_at) "
-        "OUTPUT INSERTED.id VALUES (?,?,?,?,?,?)",
+    # OUTPUT no se permite contra una tabla remota (linked server, error 405),
+    # asi que insertamos sin OUTPUT y recuperamos el id por separado. El RPA
+    # crea una corrida por ejecucion y es secuencial (el panel impide doble
+    # arranque), por lo que MAX(id) de la asignacion es la recien creada.
+    corridas = tabla("corridas_rpa")
+    cur.execute(
+        f"INSERT INTO {corridas} (asignacion_id, inicio, estado, "
+        "concurrencia, created_at, updated_at) VALUES (?,?,?,?,?,?)",
         asignacion_id, inicio, "en_curso", concurrencia, inicio, inicio,
+    )
+    row = cur.execute(
+        f"SELECT MAX(id) FROM {corridas} WHERE asignacion_id = ?", asignacion_id
     ).fetchone()
     return row[0]
 

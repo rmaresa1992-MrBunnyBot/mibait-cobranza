@@ -20,45 +20,78 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(HERE, "dashboard_control.html")
 LOG_PATH = os.path.join(HERE, "bot.log")
 
-# --- estado del subproceso del bot (protegido por lock) ---
+# --- estado de los procesos del bot (protegido por lock) ---
 _lock = threading.Lock()
-_proc: subprocess.Popen | None = None
+_procs: list[subprocess.Popen] = []
+
+
+def _vivos():
+    return [p for p in _procs if p.poll() is None]
 
 
 def _bot_running() -> bool:
-    return _proc is not None and _proc.poll() is None
+    return len(_vivos()) > 0
+
+
+def _en_franja_noche(now) -> bool:
+    def hhmm(s):
+        h, m = s.split(":")
+        return int(h) * 60 + int(m)
+    ini = hhmm(db.get_config("franja_noche_inicio", "23:00"))
+    fin = hhmm(db.get_config("franja_noche_fin", "06:00"))
+    actual = now.hour * 60 + now.minute
+    if ini <= fin:
+        return ini <= actual < fin
+    return actual >= ini or actual < fin  # cruza medianoche
+
+
+def _workers_config() -> int:
+    """Workers segun la franja actual; lo que se configura en el panel."""
+    clave = ("concurrencia_noche" if _en_franja_noche(datetime.now())
+             else "concurrencia_dia")
+    try:
+        return max(1, int(db.get_config(clave, "1") or "1"))
+    except ValueError:
+        return 1
 
 
 def start_bot(limite=None):
-    global _proc
+    global _procs
     with _lock:
         if _bot_running():
             return False, "El bot ya esta consultando."
-        cmd = [sys.executable, "consultar_asignacion.py"]
-        if limite:
-            cmd.append(str(int(limite)))
+        n = _workers_config()
         logf = open(LOG_PATH, "a", encoding="utf-8")
         logf.write(f"\n===== START {datetime.now():%Y-%m-%d %H:%M:%S} "
-                   f"limite={limite or 'todas'} =====\n")
+                   f"workers={n} limite={limite or 'todas'} =====\n")
         logf.flush()
-        _proc = subprocess.Popen(
-            cmd, cwd=HERE, stdout=logf, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-        )
-        return True, f"Bot arrancado (pid={_proc.pid})."
+        _procs = []
+        for k in range(n):
+            cmd = [sys.executable, "consultar_asignacion.py",
+                   "--worker", str(k), "--workers", str(n)]
+            if limite:
+                cmd += ["--limite", str(int(limite))]
+            _procs.append(subprocess.Popen(
+                cmd, cwd=HERE, stdout=logf, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            ))
+        return True, f"Bot arrancado con {n} worker(s)."
 
 
 def stop_bot():
-    global _proc
+    global _procs
     with _lock:
-        if not _bot_running():
+        vivos = _vivos()
+        if not vivos:
+            _procs = []
             return False, "El bot no esta corriendo."
-        pid = _proc.pid
-        # /T mata todo el arbol (incluye el Chromium de Playwright).
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                       capture_output=True)
-        _proc = None
-        return True, f"Bot detenido (pid={pid})."
+        # /T mata todo el arbol de cada worker (incluye el Chromium de Playwright).
+        for p in vivos:
+            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+                           capture_output=True)
+        n = len(vivos)
+        _procs = []
+        return True, f"Bot detenido ({n} worker(s))."
 
 
 # --- consultas de estatus (solo tablas autorizadas) ---
@@ -88,6 +121,7 @@ def leer_estatus():
             "WHERE fecha_consulta >= DATEADD(HOUR,-1,SYSDATETIME())")
         return {
             "running": _bot_running(),
+            "workers": len(_vivos()),
             "asignacion": nombre,
             "total": total,
             "pendientes": pendientes,

@@ -4,7 +4,7 @@ actualiza el estado. Throttling por franja horaria y backoff ante 403.
 
 Uso: consultar_asignacion.py [limite_cuentas]
 """
-import sys
+import argparse
 import time
 from datetime import datetime
 
@@ -97,8 +97,24 @@ def procesar(cur, c, r, ahora):
 
 # ---------- orquestador ----------
 
+def _parse_args():
+    p = argparse.ArgumentParser(description="RPA de consulta de cuentas.")
+    p.add_argument("limite", nargs="?", type=int, default=None,
+                   help="limite global de cuentas (opcional)")
+    p.add_argument("--limite", dest="limite_kw", type=int, default=None,
+                   help="igual que el posicional, para invocar desde el panel")
+    p.add_argument("--worker", type=int, default=0, help="indice de este worker (0..N-1)")
+    p.add_argument("--workers", type=int, default=1, help="total de workers en paralelo")
+    a = p.parse_args()
+    a.limite = a.limite_kw if a.limite_kw is not None else a.limite
+    a.workers = max(1, a.workers)
+    a.worker = max(0, min(a.worker, a.workers - 1))
+    return a
+
+
 def main():
-    limite = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    args = _parse_args()
+    worker, workers = args.worker, args.workers
     headless = db.get_config("rpa_headless", "false") == "true"
 
     conn = db.connect()
@@ -109,14 +125,22 @@ def main():
         conn.close()
         return
     cuentas = repos.cuentas_pendientes(cur, asig["id"])
-    if limite:
-        cuentas = cuentas[:limite]
-    print(f"Asignacion '{asig['nombre']}' (id={asig['id']}): "
-          f"{len(cuentas)} cuentas pendientes")
+    if args.limite:
+        cuentas = cuentas[:args.limite]
+    total_global = len(cuentas)
+    if workers > 1:
+        # Reparto disjunto: el worker k toma las cuentas con indice % workers == k.
+        cuentas = cuentas[worker::workers]
+    etiqueta = f"worker {worker + 1}/{workers}" if workers > 1 else "worker unico"
+    print(f"Asignacion '{asig['nombre']}' (id={asig['id']}): {len(cuentas)} cuentas "
+          f"para este proceso ({etiqueta}), {total_global} en total")
 
     inicio = datetime.now()
-    corrida_id = repos.crear_corrida(cur, asig["id"], inicio, concurrencia=1)
-    conn.commit()
+    # Solo el worker 0 registra la corrida (bitacora): con varios procesos se
+    # evita crear N corridas por arranque y la colision en crear_corrida.
+    corrida_id = None
+    if worker == 0:
+        corrida_id = repos.crear_corrida(cur, asig["id"], inicio, concurrencia=workers)
 
     exitos = errores = 0
     with sync_playwright() as p:
@@ -157,11 +181,11 @@ def main():
         browser.close()
 
     fin = datetime.now()
-    repos.cerrar_corrida(cur, corrida_id, fin, len(cuentas), exitos, errores,
-                         "completada")
-    conn.commit()
+    if corrida_id:
+        repos.cerrar_corrida(cur, corrida_id, fin, total_global, exitos, errores,
+                             "completada")
     conn.close()
-    print(f"\nCorrida {corrida_id}: {exitos} ok, {errores} errores, "
+    print(f"\n{etiqueta}: {exitos} ok, {errores} errores, "
           f"{(fin - inicio).total_seconds():.0f}s")
 
 

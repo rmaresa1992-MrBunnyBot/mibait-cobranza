@@ -2,6 +2,7 @@
 rpa/.venv/
 rpa/.env
 rpa/capturas/
+rpa/bot.log
 **/__pycache__/
 *.pyc
 
