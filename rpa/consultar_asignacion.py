@@ -6,7 +6,7 @@ Uso: consultar_asignacion.py [limite_cuentas]
 """
 import argparse
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from playwright.sync_api import sync_playwright
 
@@ -105,6 +105,8 @@ def _parse_args():
                    help="igual que el posicional, para invocar desde el panel")
     p.add_argument("--worker", type=int, default=0, help="indice de este worker (0..N-1)")
     p.add_argument("--workers", type=int, default=1, help="total de workers en paralelo")
+    p.add_argument("--once", action="store_true",
+                   help="una sola pasada en vez del modo continuo 24/7")
     a = p.parse_args()
     a.limite = a.limite_kw if a.limite_kw is not None else a.limite
     a.workers = max(1, a.workers)
@@ -112,10 +114,63 @@ def _parse_args():
     return a
 
 
+def _seleccionar(cur, asig_id, worker, workers, ventana_h, limite):
+    """Cuentas vencidas que le tocan a este worker. Reparto estable por id de
+    cuenta (id % workers == worker), para que en modo continuo una cuenta caiga
+    siempre en el mismo worker y dos procesos no se pisen."""
+    corte = datetime.now() - timedelta(hours=ventana_h)
+    cuentas = repos.cuentas_due(cur, asig_id, corte)
+    if limite:
+        cuentas = cuentas[:limite]
+    if workers > 1:
+        cuentas = [c for c in cuentas if c["id"] % workers == worker]
+    return cuentas
+
+
+def _consultar_lote(cur, page, cuentas, etiqueta):
+    """Consulta una lista de cuentas reutilizando la misma page. Devuelve
+    (exitos, errores)."""
+    exitos = errores = 0
+    n = len(cuentas)
+    for i, c in enumerate(cuentas, 1):
+        ahora = datetime.now()
+        try:
+            mibait.abrir_formulario(page)
+            r = mibait.consultar(page, c["numero"])
+        except Exception as e:  # noqa: BLE001
+            r = mibait.Resultado(numero=c["numero"], desenlace="error",
+                                 error=str(e)[:200])
+        try:
+            procesar(cur, c, r, ahora)  # autocommit: cada statement se confirma
+        except Exception as e:  # noqa: BLE001
+            errores += 1
+            print(f"  [{etiqueta} {i}/{n}] {c['numero']} -> ERROR DB: {e}")
+            continue
+
+        if r.desenlace == "error":
+            errores += 1
+        else:
+            exitos += 1
+        extra = ""
+        if r.desenlace == "con_saldo":
+            extra = f" saldo={r.total}"
+        elif r.desenlace == "al_corriente":
+            extra = " saldo=0"
+        print(f"  [{etiqueta} {i}/{n}] {c['numero']} -> {r.desenlace}{extra}")
+
+        if r.error == "403":
+            print("  403 detectado: backoff 60s")
+            time.sleep(60)
+        time.sleep(pausa_actual())
+    return exitos, errores
+
+
 def main():
     args = _parse_args()
     worker, workers = args.worker, args.workers
     headless = db.get_config("rpa_headless", "false") == "true"
+    ventana_h = float(db.get_config("rpa_ventana_horas", "24") or "24")
+    idle_seg = float(db.get_config("rpa_idle_seg", "60") or "60")
 
     conn = db.connect()
     cur = conn.cursor()
@@ -124,69 +179,42 @@ def main():
         print("No hay asignacion activa.")
         conn.close()
         return
-    cuentas = repos.cuentas_pendientes(cur, asig["id"])
-    if args.limite:
-        cuentas = cuentas[:args.limite]
-    total_global = len(cuentas)
-    if workers > 1:
-        # Reparto disjunto: el worker k toma las cuentas con indice % workers == k.
-        cuentas = cuentas[worker::workers]
-    etiqueta = f"worker {worker + 1}/{workers}" if workers > 1 else "worker unico"
-    print(f"Asignacion '{asig['nombre']}' (id={asig['id']}): {len(cuentas)} cuentas "
-          f"para este proceso ({etiqueta}), {total_global} en total")
 
-    inicio = datetime.now()
-    # Solo el worker 0 registra la corrida (bitacora): con varios procesos se
-    # evita crear N corridas por arranque y la colision en crear_corrida.
-    corrida_id = None
-    if worker == 0:
-        corrida_id = repos.crear_corrida(cur, asig["id"], inicio, concurrencia=workers)
+    etiqueta = f"w{worker + 1}/{workers}" if workers > 1 else "w1"
+    modo = "una pasada" if args.once else "continuo 24/7"
+    print(f"Asignacion '{asig['nombre']}' (id={asig['id']}) | {etiqueta} | "
+          f"modo {modo} | ventana {ventana_h:.0f}h")
 
-    exitos = errores = 0
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
         page = browser.new_context(viewport={"width": 1100, "height": 800}).new_page()
-        for i, c in enumerate(cuentas, 1):
-            ahora = datetime.now()
-            try:
-                mibait.abrir_formulario(page)
-                r = mibait.consultar(page, c["numero"])
-            except Exception as e:  # noqa: BLE001
-                r = mibait.Resultado(numero=c["numero"], desenlace="error",
-                                     error=str(e)[:200])
-            try:
-                procesar(cur, c, r, ahora)
-                conn.commit()
-            except Exception as e:  # noqa: BLE001
-                conn.rollback()
-                errores += 1
-                print(f"  [{i}/{len(cuentas)}] {c['numero']} -> ERROR DB: {e}")
+        while True:
+            cuentas = _seleccionar(cur, asig["id"], worker, workers, ventana_h, args.limite)
+            if not cuentas:
+                if args.once:
+                    print(f"{etiqueta}: no hay cuentas vencidas. Fin.")
+                    break
+                print(f"{etiqueta}: sin cuentas vencidas; espera {idle_seg:.0f}s")
+                time.sleep(idle_seg)
                 continue
 
-            if r.desenlace == "error":
-                errores += 1
-            else:
-                exitos += 1
-            extra = ""
-            if r.desenlace == "con_saldo":
-                extra = f" saldo={r.total}"
-            elif r.desenlace == "al_corriente":
-                extra = " saldo=0"
-            print(f"  [{i}/{len(cuentas)}] {c['numero']} -> {r.desenlace}{extra}")
-
-            if r.error == "403":
-                print("  403 detectado: backoff 60s")
-                time.sleep(60)
-            time.sleep(pausa_actual())
+            inicio = datetime.now()
+            # Solo el worker 0 registra la corrida (bitacora del lote).
+            corrida_id = None
+            if worker == 0:
+                corrida_id = repos.crear_corrida(cur, asig["id"], inicio, concurrencia=workers)
+            print(f"{etiqueta}: lote de {len(cuentas)} cuentas vencidas")
+            exitos, errores = _consultar_lote(cur, page, cuentas, etiqueta)
+            fin = datetime.now()
+            if corrida_id:
+                repos.cerrar_corrida(cur, corrida_id, fin, len(cuentas), exitos,
+                                     errores, "completada")
+            print(f"{etiqueta}: lote {exitos} ok, {errores} err, "
+                  f"{(fin - inicio).total_seconds():.0f}s")
+            if args.once:
+                break
         browser.close()
-
-    fin = datetime.now()
-    if corrida_id:
-        repos.cerrar_corrida(cur, corrida_id, fin, total_global, exitos, errores,
-                             "completada")
     conn.close()
-    print(f"\n{etiqueta}: {exitos} ok, {errores} errores, "
-          f"{(fin - inicio).total_seconds():.0f}s")
 
 
 if __name__ == "__main__":

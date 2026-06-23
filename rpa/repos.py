@@ -23,12 +23,20 @@ def asignacion_activa(cur):
     return {"id": row[0], "nombre": row[1]} if row else None
 
 
-def cuentas_pendientes(cur, asignacion_id):
+def cuentas_due(cur, asignacion_id, corte):
+    """Cuentas activas 'vencidas' para la ventana de refresco: nunca consultadas
+    o con ultima consulta anterior a `corte` (= ahora - ventana). Se devuelven
+    de la mas atrasada a la mas reciente para garantizar cobertura: el bot
+    siempre persigue primero lo que lleva mas tiempo sin tocarse y nunca repite
+    una cuenta ya consultada dentro de la ventana."""
     cur.execute(
         "SELECT id, numero, saldo_referencia, saldo_actual, estatus_cobranza, "
         f"ultima_consulta_at FROM {tabla('asignacion_cuentas')} "
-        "WHERE asignacion_id = ? AND cerrada = 0 ORDER BY id",
-        asignacion_id,
+        "WHERE asignacion_id = ? AND cerrada = 0 "
+        "AND (ultima_consulta_at IS NULL OR ultima_consulta_at < ?) "
+        "ORDER BY CASE WHEN ultima_consulta_at IS NULL THEN 0 ELSE 1 END, "
+        "ultima_consulta_at ASC, id",
+        asignacion_id, corte,
     )
     cols = [c[0] for c in cur.description]
     return [dict(zip(cols, r)) for r in cur.fetchall()]

@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import db
@@ -97,24 +97,36 @@ def stop_bot():
 # --- consultas de estatus (solo tablas autorizadas) ---
 
 def leer_estatus():
+    ventana_h = float(db.get_config("rpa_ventana_horas", "24") or "24")
+    corte = datetime.now() - timedelta(hours=ventana_h)
     with db.cursor() as cur:
         row = cur.execute(
             f"SELECT TOP 1 id, nombre FROM {db.tabla('asignaciones')} "
             "WHERE activa = 1"
         ).fetchone()
         if not row:
-            return {"running": _bot_running(), "asignacion": None}
+            return {"running": _bot_running(), "workers": len(_vivos()),
+                    "asignacion": None}
         aid, nombre = row[0], row[1]
         ac = db.tabla("asignacion_cuentas")
 
         def cnt(sql, *p):
             return cur.execute(sql, *p).fetchone()[0]
 
-        total = cnt(f"SELECT COUNT(*) FROM {ac} WHERE asignacion_id=? AND cerrada=0", aid)
-        pendientes = cnt(f"SELECT COUNT(*) FROM {ac} WHERE asignacion_id=? AND "
-                         "cerrada=0 AND ultima_consulta_at IS NULL", aid)
-        consultadas = cnt(f"SELECT COUNT(*) FROM {ac} WHERE asignacion_id=? AND "
-                          "cerrada=0 AND ultima_consulta_at IS NOT NULL", aid)
+        # Metricas sobre la ventana de refresco, en UNA sola consulta para que la
+        # foto sea coherente (total = consultadas + pendientes) aunque el bot este
+        # escribiendo en paralelo. "consultadas" cuenta TODA cuenta activa tocada
+        # dentro de la ventana (no solo las que siguen abiertas); "pendientes" son
+        # las vencidas que faltan en este ciclo. Las ramas CASE son exhaustivas y
+        # exclusivas sobre cerrada=0, asi que siempre suman el total.
+        total, consultadas, pendientes = cur.execute(
+            f"SELECT COUNT(*), "
+            "SUM(CASE WHEN ultima_consulta_at >= ? THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN ultima_consulta_at IS NULL OR ultima_consulta_at < ? "
+            f"THEN 1 ELSE 0 END) FROM {ac} WHERE asignacion_id=? AND cerrada=0",
+            corte, corte, aid).fetchone()
+        consultadas = consultadas or 0
+        pendientes = pendientes or 0
         cerradas = cnt(f"SELECT COUNT(*) FROM {ac} WHERE asignacion_id=? AND cerrada=1", aid)
         por_hora = cnt(
             f"SELECT COUNT(*) FROM {db.tabla('consultas')} "
@@ -128,6 +140,7 @@ def leer_estatus():
             "consultadas": consultadas,
             "cerradas": cerradas,
             "por_hora": por_hora,
+            "ventana_h": ventana_h,
             "ts": f"{datetime.now():%H:%M:%S}",
         }
 
@@ -141,6 +154,8 @@ CLAVES = [
     ("franja_noche_fin", "Fin franja noche (HH:MM)"),
     ("concurrencia_dia", "Workers de dia"),
     ("concurrencia_noche", "Workers de noche"),
+    ("rpa_ventana_horas", "Ventana de refresco (horas)"),
+    ("rpa_idle_seg", "Espera sin cuentas vencidas (seg)"),
 ]
 
 
